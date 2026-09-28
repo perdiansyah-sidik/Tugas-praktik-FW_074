@@ -1,0 +1,220 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Data Transaksi</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f8f9fa;
+            font-family: 'Tahoma', sans-serif;
+            padding: 20px;
+        }
+
+        .container {
+            margin-top: 30px;
+        }
+
+        .table-container, .form-container {
+            box-shadow: 0px 4px 8px rgba(0, 0, 0, 0.1);
+            border-radius: 10px;
+            background-color: white;
+            padding: 20px;
+        }
+
+        .form-container {
+            margin-top: 20px;
+            display: none;
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .table thead th {
+            background-color: #343a40;
+            color: white;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="table-container">
+            <h1>Daftar Transaksi</h1>
+            <button id="addDataBtn" class="btn btn-primary mb-3">+ Add Data</button>
+            <table id="data-table" class="table table-bordered table-hover">
+                <thead><tr></tr></thead>
+                <tbody>
+                    <tr><td class="text-center">Memuat data...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Form Tambah / Edit: isinya dibuat otomatis dari kolom tabel -->
+        <div class="form-container" id="formContainer">
+            <h3 id="formTitle">Tambah Data Baru</h3>
+            <form id="dataForm">
+                <div id="formFields"></div>
+                <button type="submit" class="btn btn-success" id="submitBtn">Submit</button>
+                <button type="button" id="cancelBtn" class="btn btn-secondary">Cancel</button>
+            </form>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // ===== KONFIGURASI (sesuaikan dengan API-mu) =====
+        const url = 'http://api.melangkah.my.id/transaksi/read.php';
+        const createUrl = 'http://api.melangkah.my.id/transaksi/create.php';
+        const updateUrl = 'http://api.melangkah.my.id/transaksi/update.php';
+
+        // Field yang diisi otomatis oleh server: tidak muncul di form Tambah, dikunci (disabled) di form Edit
+        const AUTO_FIELDS = ['tanggal_transaksi', 'total_harga'];
+        // Kolom cadangan jika tabel masih kosong
+        const DEFAULT_COLUMNS = ['id_transaksi', 'tanggal_transaksi', 'id_produk', 'jumlah', 'total_harga', 'status_transaksi'];
+
+        let rows = [];
+        let columns = DEFAULT_COLUMNS;
+        let idKey = columns[0];   // kolom pertama dianggap primary key
+        let editIndex = null;     // null = mode tambah, angka = mode edit
+
+        const esc = s => String(s ?? '-').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        const label = k => k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+
+        // ===== READ =====
+        async function getData() {
+            const tbody = document.querySelector('#data-table tbody');
+            try {
+                let response = await fetch(url);
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                let data = await response.json();
+                console.log('Respon API:', data);
+
+                if (data && Array.isArray(data.data)) data = data.data;
+                if (!Array.isArray(data)) data = [data];
+                rows = data;
+
+                // Kolom tabel mengikuti field dari API
+                if (rows.length > 0) columns = Object.keys(rows[0]);
+                idKey = columns[0];
+
+                renderTable();
+            } catch (error) {
+                console.error('Gagal mengambil data:', error);
+                tbody.innerHTML = '<tr><td class="text-center">Tidak dapat mengambil data.</td></tr>';
+            }
+        }
+
+        function renderTable() {
+            const headRow = document.querySelector('#data-table thead tr');
+            headRow.innerHTML = columns.map(c => `<th>${esc(label(c))}</th>`).join('') + '<th>Aksi</th>';
+
+            const tbody = document.querySelector('#data-table tbody');
+            if (rows.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="${columns.length + 1}" class="text-center">Belum ada data.</td></tr>`;
+                return;
+            }
+            tbody.innerHTML = rows.map((r, i) => `
+                    <tr>
+                        ${columns.map(c => `<td>${esc(r[c])}</td>`).join('')}
+                        <td><button class="btn btn-warning btn-sm" onclick="editRow(${i})">Edit</button></td>
+                    </tr>`).join('');
+        }
+
+        // ===== Bangun field form dari kolom tabel =====
+        function buildForm(values) {
+            const box = document.getElementById('formFields');
+            box.innerHTML = '';
+            columns.forEach(c => {
+                const isId = c === idKey;
+                const isAuto = AUTO_FIELDS.includes(c);
+                // Mode tambah: sembunyikan id dan field otomatis
+                if (editIndex === null && (isId || isAuto)) return;
+
+                const wrap = document.createElement('div');
+                wrap.className = 'mb-3';
+                const lb = document.createElement('label');
+                lb.className = 'form-label';
+                lb.htmlFor = 'f_' + c;
+                lb.textContent = label(c);
+                const input = document.createElement('input');
+                input.className = 'form-control';
+                input.id = 'f_' + c;
+                input.name = c;
+                const sample = rows[0] ? rows[0][c] : '';
+                input.type = (c.startsWith('id_') || c === 'jumlah' || c === 'stok') ? 'number' : 'text';
+                if (values) input.value = values[c] ?? '';
+                // Saat edit, id dan field otomatis tidak boleh diubah
+                if (editIndex !== null && (isId || isAuto)) input.disabled = true;
+                else input.required = true;
+
+                wrap.append(lb, input);
+                box.appendChild(wrap);
+            });
+        }
+
+        // ===== Tampil / sembunyikan form =====
+        document.getElementById('addDataBtn').addEventListener('click', function () {
+            editIndex = null;
+            document.getElementById('formTitle').textContent = 'Tambah Data Baru';
+            document.getElementById('submitBtn').textContent = 'Submit';
+            buildForm(null);
+            document.getElementById('formContainer').style.display = 'block';
+        });
+
+        document.getElementById('cancelBtn').addEventListener('click', function () {
+            document.getElementById('formContainer').style.display = 'none';
+        });
+
+        // ===== EDIT: isi form dengan data baris yang dipilih =====
+        function editRow(i) {
+            editIndex = i;
+            document.getElementById('formTitle').textContent = 'Update Data';
+            document.getElementById('submitBtn').textContent = 'Update';
+            buildForm(rows[i]);
+            document.getElementById('formContainer').style.display = 'block';
+            document.getElementById('formContainer').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        // ===== CREATE & UPDATE =====
+        document.getElementById('dataForm').addEventListener('submit', async function (e) {
+            e.preventDefault();
+
+            // Ambil semua nilai field yang aktif di form
+            const payload = {};
+            document.querySelectorAll('#formFields input').forEach(inp => {
+                if (!inp.disabled) payload[inp.name] = inp.type === 'number' ? Number(inp.value) : inp.value;
+            });
+
+            const isEdit = editIndex !== null;
+            if (isEdit) payload[idKey] = rows[editIndex][idKey]; // sertakan id untuk update
+
+            try {
+                let response = await fetch(isEdit ? updateUrl : createUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
+                let result = {};
+                try { result = await response.json(); } catch (_) { }
+                alert(result.message || (isEdit ? 'Data berhasil diperbarui!' : 'Data berhasil ditambahkan!'));
+
+                document.getElementById('formContainer').style.display = 'none';
+                getData();
+            } catch (error) {
+                console.error('Gagal mengirim data:', error);
+                alert('Gagal mengirim data.');
+            }
+        });
+
+        getData();
+    </script>
+</body>
+
+</html>
